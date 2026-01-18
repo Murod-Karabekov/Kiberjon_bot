@@ -401,8 +401,13 @@ async def coin_add(callback: CallbackQuery, state: FSMContext):
     
     await callback.message.answer(
         "➕ <b>Coin Qo'shish</b>\n\n"
-        "Userning telefon raqamini yuboring:\n"
-        "Masalan: +998901234567\n\n"
+        "Userlarning telefon raqamlarini yuboring:\n\n"
+        "📱 <b>Bir user:</b> +998901234567\n"
+        "📱 <b>Ko'p userlar:</b>\n"
+        "+998901234567\n"
+        "+998909876543\n"
+        "+998331234567\n\n"
+        "Yoki vergul bilan: +998901234567, +998909876543\n\n"
         "❌ Bekor qilish uchun /cancel yuboring",
         parse_mode="HTML"
     )
@@ -417,8 +422,13 @@ async def coin_remove(callback: CallbackQuery, state: FSMContext):
     
     await callback.message.answer(
         "➖ <b>Coin Ayirish</b>\n\n"
-        "Userning telefon raqamini yuboring:\n"
-        "Masalan: +998901234567\n\n"
+        "Userlarning telefon raqamlarini yuboring:\n\n"
+        "📱 <b>Bir user:</b> +998901234567\n"
+        "📱 <b>Ko'p userlar:</b>\n"
+        "+998901234567\n"
+        "+998909876543\n"
+        "+998331234567\n\n"
+        "Yoki vergul bilan: +998901234567, +998909876543\n\n"
         "❌ Bekor qilish uchun /cancel yuboring",
         parse_mode="HTML"
     )
@@ -427,35 +437,73 @@ async def coin_remove(callback: CallbackQuery, state: FSMContext):
 
 @router.message(CoinManagementStates.waiting_for_phone, F.text)
 async def process_phone_for_coins(message: Message, state: FSMContext, db: Database):
-    """Telefon raqamni qabul qilish va userni topish"""
-    phone = message.text.strip()
+    """Telefon raqamlarni qabul qilish va userlarni topish"""
+    phones_text = message.text.strip()
     
-    # Find user by phone
-    user = await db.get_user_by_phone(phone)
+    # Split by comma or newline
+    phone_list = []
+    for line in phones_text.replace(',', '\n').split('\n'):
+        phone = line.strip()
+        if phone:
+            phone_list.append(phone)
     
-    if not user:
+    if not phone_list:
+        await message.answer("❌ Telefon raqam kiriting!")
+        return
+    
+    # Find all users
+    found_users = []
+    not_found = []
+    
+    for phone in phone_list:
+        user = await db.get_user_by_phone(phone)
+        if user:
+            found_users.append({
+                'user': user,
+                'phone': phone
+            })
+        else:
+            not_found.append(phone)
+    
+    if not found_users:
         await message.answer(
-            f"❌ Telefon raqami {phone} topilmadi!\n\n"
-            "Boshqa raqam kiriting yoki /cancel yuboring."
+            f"❌ Hech bir user topilmadi!\n\n"
+            f"Topilmagan raqamlar:\n" + "\n".join(not_found) + "\n\n"
+            "Boshqa raqamlar kiriting yoki /cancel yuboring."
         )
         return
     
-    # Save user_id to state
-    await state.update_data(user_id=user.id, user_name=user.preferred_name or user.first_name)
+    # Save user_ids to state
+    user_ids = [u['user'].id for u in found_users]
+    user_names = [u['user'].preferred_name or u['user'].first_name for u in found_users]
     
-    # Ask for amount
+    await state.update_data(
+        user_ids=user_ids,
+        user_names=user_names,
+        is_bulk=len(found_users) > 1
+    )
+    
+    # Show found users
     state_data = await state.get_data()
     action = state_data.get("action")
     action_text = "qo'shmoqchisiz" if action == "add" else "ayirmoqchisiz"
     
-    await message.answer(
-        f"✅ User topildi: <b>{user.preferred_name or user.first_name}</b>\n"
-        f"💰 Hozirgi balans: <b>{user.coins} KiberCoin</b>\n\n"
-        f"Nechta KiberCoin {action_text}?\n"
-        "Masalan: 100\n\n"
-        "❌ Bekor qilish uchun /cancel yuboring",
-        parse_mode="HTML"
-    )
+    result_text = f"✅ <b>{len(found_users)} ta user topildi:</b>\n\n"
+    
+    for item in found_users:
+        user = item['user']
+        result_text += f"👤 {user.preferred_name or user.first_name}\n"
+        result_text += f"   💰 Balans: {user.coins} KiberCoin\n"
+        result_text += f"   📱 {item['phone']}\n\n"
+    
+    if not_found:
+        result_text += f"❌ <b>Topilmagan raqamlar:</b>\n" + "\n".join(not_found) + "\n\n"
+    
+    result_text += f"Hamma userlarga nechta KiberCoin {action_text}?\n"
+    result_text += "Masalan: 100\n\n"
+    result_text += "❌ Bekor qilish uchun /cancel yuboring"
+    
+    await message.answer(result_text, parse_mode="HTML")
     await state.set_state(CoinManagementStates.waiting_for_amount)
 
 
@@ -472,67 +520,114 @@ async def process_coin_amount(message: Message, state: FSMContext, db: Database)
         return
     
     state_data = await state.get_data()
-    user_id = state_data.get("user_id")
-    user_name = state_data.get("user_name")
+    is_bulk = state_data.get("is_bulk", False)
     action = state_data.get("action")
     
     # Get admin user
     admin = await db.get_user(message.from_user.id)
     
-    if action == "add":
-        # Add coins
-        success = await db.add_coins(
-            user_id=user_id,
-            amount=amount,
-            transaction_type=TransactionType.ADMIN_ADD,
-            description=f"Admin tomonidan qo'shildi",
-            admin_id=admin.id
-        )
+    if is_bulk:
+        # Multiple users
+        user_ids = state_data.get("user_ids", [])
+        user_names = state_data.get("user_names", [])
         
-        if success:
-            # Get updated user
-            async with db.session_maker() as session:
-                from sqlalchemy import select
-                from bot.database.models import User
-                result = await session.execute(select(User).where(User.id == user_id))
-                user = result.scalar_one_or_none()
+        success_count = 0
+        failed_count = 0
+        
+        for user_id, user_name in zip(user_ids, user_names):
+            if action == "add":
+                success = await db.add_coins(
+                    user_id=user_id,
+                    amount=amount,
+                    transaction_type=TransactionType.ADMIN_ADD,
+                    description=f"Admin tomonidan qo'shildi (bulk)",
+                    admin_id=admin.id
+                )
+            else:  # remove
+                success = await db.remove_coins(
+                    user_id=user_id,
+                    amount=amount,
+                    description=f"Admin tomonidan olib tashlandi (bulk)",
+                    admin_id=admin.id
+                )
             
-            await message.answer(
-                f"✅ Muvaffaqiyatli!\n\n"
-                f"👤 User: <b>{user_name}</b>\n"
-                f"➕ Qo'shildi: <b>{amount} KiberCoin</b>\n"
-                f"💰 Yangi balans: <b>{user.coins} KiberCoin</b>",
-                parse_mode="HTML"
-            )
-        else:
-            await message.answer("❌ Xatolik yuz berdi!")
+            if success:
+                success_count += 1
+            else:
+                failed_count += 1
+        
+        action_symbol = "➕" if action == "add" else "➖"
+        action_word = "qo'shildi" if action == "add" else "olib tashlandi"
+        
+        await message.answer(
+            f"✅ <b>Bulk operatsiya yakunlandi!</b>\n\n"
+            f"{action_symbol} Miqdor: <b>{amount} KiberCoin</b>\n"
+            f"👥 Jami userlar: <b>{len(user_ids)}</b>\n"
+            f"✅ Muvaffaqiyatli: <b>{success_count}</b>\n"
+            f"❌ Xatolik: <b>{failed_count}</b>\n\n"
+            f"Barcha userlarga {amount} KiberCoin {action_word}!",
+            parse_mode="HTML"
+        )
     
-    else:  # remove
-        # Remove coins
-        success = await db.remove_coins(
-            user_id=user_id,
-            amount=amount,
-            description=f"Admin tomonidan olib tashlandi",
-            admin_id=admin.id
-        )
+    else:
+        # Single user
+        user_id = state_data.get("user_id")
+        user_name = state_data.get("user_name")
         
-        if success:
-            # Get updated user
-            async with db.session_maker() as session:
-                from sqlalchemy import select
-                from bot.database.models import User
-                result = await session.execute(select(User).where(User.id == user_id))
-                user = result.scalar_one_or_none()
-            
-            await message.answer(
-                f"✅ Muvaffaqiyatli!\n\n"
-                f"👤 User: <b>{user_name}</b>\n"
-                f"➖ Olib tashlandi: <b>{amount} KiberCoin</b>\n"
-                f"💰 Yangi balans: <b>{user.coins} KiberCoin</b>",
-                parse_mode="HTML"
+        if action == "add":
+            # Add coins
+            success = await db.add_coins(
+                user_id=user_id,
+                amount=amount,
+                transaction_type=TransactionType.ADMIN_ADD,
+                description=f"Admin tomonidan qo'shildi",
+                admin_id=admin.id
             )
-        else:
-            await message.answer("❌ Xatolik yuz berdi!")
+            
+            if success:
+                # Get updated user
+                async with db.session_maker() as session:
+                    from sqlalchemy import select
+                    from bot.database.models import User
+                    result = await session.execute(select(User).where(User.id == user_id))
+                    user = result.scalar_one_or_none()
+                
+                await message.answer(
+                    f"✅ Muvaffaqiyatli!\n\n"
+                    f"👤 User: <b>{user_name}</b>\n"
+                    f"➕ Qo'shildi: <b>{amount} KiberCoin</b>\n"
+                    f"💰 Yangi balans: <b>{user.coins} KiberCoin</b>",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer("❌ Xatolik yuz berdi!")
+        
+        else:  # remove
+            # Remove coins
+            success = await db.remove_coins(
+                user_id=user_id,
+                amount=amount,
+                description=f"Admin tomonidan olib tashlandi",
+                admin_id=admin.id
+            )
+            
+            if success:
+                # Get updated user
+                async with db.session_maker() as session:
+                    from sqlalchemy import select
+                    from bot.database.models import User
+                    result = await session.execute(select(User).where(User.id == user_id))
+                    user = result.scalar_one_or_none()
+                
+                await message.answer(
+                    f"✅ Muvaffaqiyatli!\n\n"
+                    f"👤 User: <b>{user_name}</b>\n"
+                    f"➖ Olib tashlandi: <b>{amount} KiberCoin</b>\n"
+                    f"💰 Yangi balans: <b>{user.coins} KiberCoin</b>",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer("❌ Xatolik yuz berdi!")
     
     await state.clear()
 
