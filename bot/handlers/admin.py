@@ -477,11 +477,20 @@ async def process_phone_for_coins(message: Message, state: FSMContext, db: Datab
     user_ids = [u['user'].id for u in found_users]
     user_names = [u['user'].preferred_name or u['user'].first_name for u in found_users]
     
-    await state.update_data(
-        user_ids=user_ids,
-        user_names=user_names,
-        is_bulk=len(found_users) > 1
-    )
+    is_bulk = len(found_users) > 1
+    if is_bulk:
+        await state.update_data(
+            user_ids=user_ids,
+            user_names=user_names,
+            is_bulk=True
+        )
+    else:
+        # Single user uchun user_id va user_name ni saqlash
+        await state.update_data(
+            user_id=found_users[0]['user'].id,
+            user_name=found_users[0]['user'].preferred_name or found_users[0]['user'].first_name,
+            is_bulk=False
+        )
     
     # Show found users
     state_data = await state.get_data()
