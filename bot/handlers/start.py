@@ -148,6 +148,9 @@ async def process_name(message: Message, state: FSMContext, db: Database):
     await message.answer(
         f"Juda yaxshi, {preferred_name}! 🎉\n\n"
         f"Ro'yxatdan o'tish muvaffaqiyatli yakunlandi! ✅\n\n"
+        f"Kiber xavfsizlik bo'yicha viktorinani boshlash uchun\n\n"
+        f"Ushbu linkga bosing\n\n"
+        f"Link: https://forms.gle/PaSxn2DR7RGKGsBL9\n\n"
         f"💰 Do'stlaringizni taklif qiling va KiberCoin yutib oling!\n"
         f"/coins buyrug'i orqali referal linkingizni oling."
     )
