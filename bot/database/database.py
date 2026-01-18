@@ -236,12 +236,39 @@ class Database:
             return result.scalar_one_or_none()
 
     async def get_user_by_phone(self, phone_number: str) -> Optional[User]:
-        """Get user by phone number"""
+        """Get user by phone number - handles different formats"""
         async with self.session_maker() as session:
+            # Clean phone number - remove spaces, dashes, parentheses
+            clean_phone = ''.join(filter(str.isdigit, phone_number))
+            
+            # Try exact match first
             result = await session.execute(
                 select(User).where(User.phone_number == phone_number)
             )
-            return result.scalar_one_or_none()
+            user = result.scalar_one_or_none()
+            
+            if user:
+                return user
+            
+            # Try with + prefix
+            if not phone_number.startswith('+'):
+                result = await session.execute(
+                    select(User).where(User.phone_number == f"+{phone_number}")
+                )
+                user = result.scalar_one_or_none()
+                if user:
+                    return user
+            
+            # Try to find by matching digits only
+            if clean_phone:
+                result = await session.execute(select(User))
+                for db_user in result.scalars():
+                    if db_user.phone_number:
+                        db_clean = ''.join(filter(str.isdigit, db_user.phone_number))
+                        if db_clean == clean_phone or db_clean.endswith(clean_phone) or clean_phone.endswith(db_clean):
+                            return db_user
+            
+            return None
 
     async def set_referral_code(self, user_id: int) -> str:
         """Generate and set referral code for user"""
