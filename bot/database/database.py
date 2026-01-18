@@ -1,8 +1,10 @@
 from typing import Optional
 from datetime import datetime
+import secrets
+import string
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy import select
-from bot.database.models import Base, User, UserRole, Group, ChatType
+from bot.database.models import Base, User, UserRole, Group, ChatType, CoinTransaction, TransactionType
 from bot.config import DATABASE_URL
 
 
@@ -218,3 +220,132 @@ class Database:
     async def close(self):
         """Close database connection"""
         await self.engine.dispose()
+
+    # KiberCoin operations
+    def generate_referral_code(self) -> str:
+        """Generate unique referral code"""
+        chars = string.ascii_uppercase + string.digits
+        return ''.join(secrets.choice(chars) for _ in range(8))
+
+    async def get_user_by_referral_code(self, referral_code: str) -> Optional[User]:
+        """Get user by referral code"""
+        async with self.session_maker() as session:
+            result = await session.execute(
+                select(User).where(User.referral_code == referral_code)
+            )
+            return result.scalar_one_or_none()
+
+    async def get_user_by_phone(self, phone_number: str) -> Optional[User]:
+        """Get user by phone number"""
+        async with self.session_maker() as session:
+            result = await session.execute(
+                select(User).where(User.phone_number == phone_number)
+            )
+            return result.scalar_one_or_none()
+
+    async def set_referral_code(self, user_id: int) -> str:
+        """Generate and set referral code for user"""
+        async with self.session_maker() as session:
+            result = await session.execute(
+                select(User).where(User.id == user_id)
+            )
+            user = result.scalar_one_or_none()
+            if user and not user.referral_code:
+                # Generate unique code
+                while True:
+                    code = self.generate_referral_code()
+                    existing = await self.get_user_by_referral_code(code)
+                    if not existing:
+                        break
+                
+                user.referral_code = code
+                await session.commit()
+                await session.refresh(user)
+                return code
+            return user.referral_code if user else None
+
+    async def add_coins(
+        self,
+        user_id: int,
+        amount: int,
+        transaction_type: TransactionType,
+        description: Optional[str] = None,
+        admin_id: Optional[int] = None,
+        related_user_id: Optional[int] = None
+    ) -> bool:
+        """Add coins to user and record transaction"""
+        async with self.session_maker() as session:
+            result = await session.execute(
+                select(User).where(User.id == user_id)
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                user.coins += amount
+                
+                # Create transaction record
+                transaction = CoinTransaction(
+                    user_id=user_id,
+                    amount=amount,
+                    transaction_type=transaction_type,
+                    description=description,
+                    admin_id=admin_id,
+                    related_user_id=related_user_id
+                )
+                session.add(transaction)
+                
+                await session.commit()
+                return True
+            return False
+
+    async def remove_coins(
+        self,
+        user_id: int,
+        amount: int,
+        description: Optional[str] = None,
+        admin_id: Optional[int] = None
+    ) -> bool:
+        """Remove coins from user and record transaction"""
+        async with self.session_maker() as session:
+            result = await session.execute(
+                select(User).where(User.id == user_id)
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                user.coins -= amount
+                if user.coins < 0:
+                    user.coins = 0
+                
+                # Create transaction record
+                transaction = CoinTransaction(
+                    user_id=user_id,
+                    amount=-amount,
+                    transaction_type=TransactionType.ADMIN_REMOVE,
+                    description=description,
+                    admin_id=admin_id
+                )
+                session.add(transaction)
+                
+                await session.commit()
+                return True
+            return False
+
+    async def get_transactions(
+        self,
+        user_id: Optional[int] = None,
+        limit: int = 50
+    ) -> list[CoinTransaction]:
+        """Get transaction history"""
+        async with self.session_maker() as session:
+            query = select(CoinTransaction)
+            if user_id:
+                query = query.where(CoinTransaction.user_id == user_id)
+            query = query.order_by(CoinTransaction.created_at.desc()).limit(limit)
+            result = await session.execute(query)
+            return list(result.scalars().all())
+
+    async def get_total_coins_in_system(self) -> int:
+        """Get total KiberCoins in the system"""
+        async with self.session_maker() as session:
+            users = await session.execute(select(User))
+            total = sum(user.coins for user in users.scalars().all())
+            return total

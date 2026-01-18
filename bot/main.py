@@ -5,7 +5,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from bot.config import BOT_TOKEN
 from bot.database.database import Database
-from bot.handlers import start, groups, admin, broadcast
+from bot.handlers import start, groups, admin, broadcast, coins
 
 # Configure logging
 logging.basicConfig(
@@ -47,6 +47,7 @@ async def main():
     dp.include_router(groups.router)
     dp.include_router(admin.router)
     dp.include_router(broadcast.router)
+    dp.include_router(coins.router)
 
     # Inject database into handlers
     dp["db"] = db

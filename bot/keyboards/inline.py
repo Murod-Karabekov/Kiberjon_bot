@@ -6,7 +6,8 @@ def get_admin_main_menu() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats")],
-            [InlineKeyboardButton(text="📢 Broadcast", callback_data="admin_broadcast")],
+            [InlineKeyboardButton(text="� KiberCoin Boshqaruvi", callback_data="admin_coin_management")],
+            [InlineKeyboardButton(text="�📢 Broadcast", callback_data="admin_broadcast")],
             [InlineKeyboardButton(text="❌ Yopish", callback_data="admin_close")]
         ]
     )
@@ -95,3 +96,53 @@ def get_broadcast_target_keyboard() -> InlineKeyboardMarkup:
         ]
     )
     return keyboard
+
+
+def get_coins_menu() -> InlineKeyboardMarkup:
+    """KiberCoin menu for users"""
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📋 Nusxalash", callback_data="copy_referral_link"),
+                InlineKeyboardButton(text="📤 Ulashish", callback_data="share_referral_link")
+            ],
+            [InlineKeyboardButton(text="📊 Tranzaksiyalar", callback_data="my_transactions")]
+        ]
+    )
+    return keyboard
+
+
+def get_coin_management_menu() -> InlineKeyboardMarkup:
+    """Admin coin management menu"""
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Coin Qo'shish", callback_data="coin_add")],
+            [InlineKeyboardButton(text="➖ Coin Ayirish", callback_data="coin_remove")],
+            [InlineKeyboardButton(text="📊 Tranzaksiyalar", callback_data="coin_transactions")],
+            [InlineKeyboardButton(text="🔙 Orqaga", callback_data="coin_back")]
+        ]
+    )
+    return keyboard
+
+
+def get_transactions_navigation(page: int = 1, total_pages: int = 1) -> InlineKeyboardMarkup:
+    """Transactions list navigation"""
+    buttons = []
+    
+    # Navigation buttons
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="◀️", callback_data=f"transactions_page_{page-1}"))
+    
+    nav_row.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="transactions_current"))
+    
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(text="▶️", callback_data=f"transactions_page_{page+1}"))
+    
+    if nav_row:
+        buttons.append(nav_row)
+    
+    # Back button
+    buttons.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="transactions_back")])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)

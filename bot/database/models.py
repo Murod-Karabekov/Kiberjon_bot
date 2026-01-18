@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import BigInteger, String, DateTime, Boolean, Enum, Text, Integer
+from sqlalchemy import BigInteger, String, DateTime, Boolean, Enum, Text, Integer, ForeignKey, Numeric
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 import enum
 
@@ -15,6 +15,13 @@ class ChatType(enum.Enum):
     GROUP = "group"
     SUPERGROUP = "supergroup"
     CHANNEL = "channel"
+
+
+class TransactionType(enum.Enum):
+    """Transaction type enum"""
+    REFERRAL_BONUS = "referral_bonus"
+    ADMIN_ADD = "admin_add"
+    ADMIN_REMOVE = "admin_remove"
 
 
 class Base(DeclarativeBase):
@@ -34,6 +41,12 @@ class User(Base):
     language_code: Mapped[str] = mapped_column(String(10), nullable=True)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.USER, nullable=False)
     is_registered: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    
+    # KiberCoin fields
+    referral_code: Mapped[str] = mapped_column(String(20), unique=True, nullable=True, index=True)
+    referred_by_id: Mapped[int] = mapped_column(Integer, ForeignKey('users.id'), nullable=True)
+    coins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -61,3 +74,20 @@ class Group(Base):
 
     def __repr__(self):
         return f"<Group(chat_id={self.chat_id}, title={self.title}, bot_is_admin={self.bot_is_admin}, is_active={self.is_active})>"
+
+
+class CoinTransaction(Base):
+    """KiberCoin transaction history"""
+    __tablename__ = "coin_transactions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)  # Positive for add, negative for remove
+    transaction_type: Mapped[TransactionType] = mapped_column(Enum(TransactionType), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    admin_id: Mapped[int] = mapped_column(Integer, ForeignKey('users.id'), nullable=True)  # For admin transactions
+    related_user_id: Mapped[int] = mapped_column(Integer, ForeignKey('users.id'), nullable=True)  # For referral transactions
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<CoinTransaction(user_id={self.user_id}, amount={self.amount}, type={self.transaction_type.value})>"

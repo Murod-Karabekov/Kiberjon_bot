@@ -1,15 +1,19 @@
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
+from aiogram.fsm.context import FSMContext
 from bot.database.database import Database
-from bot.database.models import UserRole
+from bot.database.models import UserRole, TransactionType
 from bot.keyboards.inline import (
     get_admin_main_menu,
     get_stats_keyboard,
     get_back_button,
     get_users_navigation,
-    get_groups_navigation
+    get_groups_navigation,
+    get_coin_management_menu,
+    get_transactions_navigation
 )
+from bot.states.admin import CoinManagementStates
 import math
 
 router = Router()
@@ -365,3 +369,262 @@ async def close_admin_panel(callback: CallbackQuery):
 async def ignore_current_page(callback: CallbackQuery):
     """Current page tugmasini ignore qilish"""
     await callback.answer()
+
+
+# KiberCoin Management handlers
+@router.callback_query(F.data == "admin_coin_management")
+async def admin_coin_management(callback: CallbackQuery, db: Database):
+    """KiberCoin boshqaruvi menyu"""
+    # Get total coins in system
+    total_coins = await db.get_total_coins_in_system()
+    
+    # Get user count
+    all_users = await db.get_all_users()
+    users_with_coins = sum(1 for u in all_users if u.coins > 0)
+    
+    text = (
+        "💰 <b>KiberCoin Boshqaruvi</b>\n\n"
+        f"📊 Tizimda jami: <b>{total_coins} KiberCoin</b>\n"
+        f"👥 Coin'li userlar: <b>{users_with_coins}</b>\n\n"
+        "Quyidagi tugmalardan birini tanlang:"
+    )
+    
+    await callback.message.edit_text(text, reply_markup=get_coin_management_menu())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "coin_add")
+async def coin_add(callback: CallbackQuery, state: FSMContext):
+    """Coin qo'shish - telefon raqam so'rash"""
+    await state.set_state(CoinManagementStates.waiting_for_phone)
+    await state.update_data(action="add")
+    
+    await callback.message.answer(
+        "➕ <b>Coin Qo'shish</b>\n\n"
+        "Userning telefon raqamini yuboring:\n"
+        "Masalan: +998901234567\n\n"
+        "❌ Bekor qilish uchun /cancel yuboring",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "coin_remove")
+async def coin_remove(callback: CallbackQuery, state: FSMContext):
+    """Coin ayirish - telefon raqam so'rash"""
+    await state.set_state(CoinManagementStates.waiting_for_phone)
+    await state.update_data(action="remove")
+    
+    await callback.message.answer(
+        "➖ <b>Coin Ayirish</b>\n\n"
+        "Userning telefon raqamini yuboring:\n"
+        "Masalan: +998901234567\n\n"
+        "❌ Bekor qilish uchun /cancel yuboring",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.message(CoinManagementStates.waiting_for_phone, F.text)
+async def process_phone_for_coins(message: Message, state: FSMContext, db: Database):
+    """Telefon raqamni qabul qilish va userni topish"""
+    phone = message.text.strip()
+    
+    # Find user by phone
+    user = await db.get_user_by_phone(phone)
+    
+    if not user:
+        await message.answer(
+            f"❌ Telefon raqami {phone} topilmadi!\n\n"
+            "Boshqa raqam kiriting yoki /cancel yuboring."
+        )
+        return
+    
+    # Save user_id to state
+    await state.update_data(user_id=user.id, user_name=user.preferred_name or user.first_name)
+    
+    # Ask for amount
+    state_data = await state.get_data()
+    action = state_data.get("action")
+    action_text = "qo'shmoqchisiz" if action == "add" else "ayirmoqchisiz"
+    
+    await message.answer(
+        f"✅ User topildi: <b>{user.preferred_name or user.first_name}</b>\n"
+        f"💰 Hozirgi balans: <b>{user.coins} KiberCoin</b>\n\n"
+        f"Nechta KiberCoin {action_text}?\n"
+        "Masalan: 100\n\n"
+        "❌ Bekor qilish uchun /cancel yuboring",
+        parse_mode="HTML"
+    )
+    await state.set_state(CoinManagementStates.waiting_for_amount)
+
+
+@router.message(CoinManagementStates.waiting_for_amount, F.text)
+async def process_coin_amount(message: Message, state: FSMContext, db: Database):
+    """Coin miqdorini qabul qilish va amalga oshirish"""
+    try:
+        amount = int(message.text.strip())
+        if amount <= 0:
+            await message.answer("❌ Musbat son kiriting!")
+            return
+    except ValueError:
+        await message.answer("❌ Faqat raqam kiriting!")
+        return
+    
+    state_data = await state.get_data()
+    user_id = state_data.get("user_id")
+    user_name = state_data.get("user_name")
+    action = state_data.get("action")
+    
+    # Get admin user
+    admin = await db.get_user(message.from_user.id)
+    
+    if action == "add":
+        # Add coins
+        success = await db.add_coins(
+            user_id=user_id,
+            amount=amount,
+            transaction_type=TransactionType.ADMIN_ADD,
+            description=f"Admin tomonidan qo'shildi",
+            admin_id=admin.id
+        )
+        
+        if success:
+            # Get updated user
+            async with db.session_maker() as session:
+                from sqlalchemy import select
+                from bot.database.models import User
+                result = await session.execute(select(User).where(User.id == user_id))
+                user = result.scalar_one_or_none()
+            
+            await message.answer(
+                f"✅ Muvaffaqiyatli!\n\n"
+                f"👤 User: <b>{user_name}</b>\n"
+                f"➕ Qo'shildi: <b>{amount} KiberCoin</b>\n"
+                f"💰 Yangi balans: <b>{user.coins} KiberCoin</b>",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer("❌ Xatolik yuz berdi!")
+    
+    else:  # remove
+        # Remove coins
+        success = await db.remove_coins(
+            user_id=user_id,
+            amount=amount,
+            description=f"Admin tomonidan olib tashlandi",
+            admin_id=admin.id
+        )
+        
+        if success:
+            # Get updated user
+            async with db.session_maker() as session:
+                from sqlalchemy import select
+                from bot.database.models import User
+                result = await session.execute(select(User).where(User.id == user_id))
+                user = result.scalar_one_or_none()
+            
+            await message.answer(
+                f"✅ Muvaffaqiyatli!\n\n"
+                f"👤 User: <b>{user_name}</b>\n"
+                f"➖ Olib tashlandi: <b>{amount} KiberCoin</b>\n"
+                f"💰 Yangi balans: <b>{user.coins} KiberCoin</b>",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer("❌ Xatolik yuz berdi!")
+    
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("coin_transactions") | F.data.startswith("transactions_page_"))
+async def show_all_transactions(callback: CallbackQuery, db: Database):
+    """Barcha tranzaksiyalarni ko'rsatish"""
+    # Parse page number
+    page = 1
+    if callback.data.startswith("transactions_page_"):
+        page = int(callback.data.split("_")[-1])
+    
+    # Get all transactions
+    all_transactions = await db.get_transactions(limit=1000)
+    
+    # Pagination
+    items_per_page = 10
+    total_pages = max(1, math.ceil(len(all_transactions) / items_per_page))
+    page = max(1, min(page, total_pages))
+    
+    start_idx = (page - 1) * items_per_page
+    end_idx = start_idx + items_per_page
+    page_transactions = all_transactions[start_idx:end_idx]
+    
+    if not page_transactions:
+        await callback.answer("📭 Tranzaksiyalar yo'q", show_alert=True)
+        return
+    
+    text = f"📊 <b>Barcha Tranzaksiyalar</b> (Sahifa {page}/{total_pages})\n\n"
+    
+    for tx in page_transactions:
+        # Get user info
+        async with db.session_maker() as session:
+            from sqlalchemy import select
+            from bot.database.models import User
+            result = await session.execute(select(User).where(User.id == tx.user_id))
+            user = result.scalar_one_or_none()
+        
+        amount_str = f"+{tx.amount}" if tx.amount > 0 else str(tx.amount)
+        emoji = "💰" if tx.amount > 0 else "💸"
+        
+        type_name = {
+            "referral_bonus": "Referal bonus",
+            "admin_add": "Admin qo'shdi",
+            "admin_remove": "Admin ayirdi"
+        }.get(tx.transaction_type.value, "Noma'lum")
+        
+        user_name = user.preferred_name or user.first_name if user else "Noma'lum"
+        date_str = tx.created_at.strftime("%d.%m.%Y %H:%M")
+        
+        text += f"{emoji} <b>{amount_str}</b> - {user_name}\n"
+        text += f"   {type_name} - {date_str}\n"
+        if tx.description:
+            text += f"   💬 {tx.description}\n"
+        text += "\n"
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=get_transactions_navigation(page, total_pages),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "transactions_back")
+async def transactions_back(callback: CallbackQuery, db: Database):
+    """Tranzaksiyalardan coin management'ga qaytish"""
+    await admin_coin_management(callback, db)
+
+
+@router.callback_query(F.data == "coin_back")
+async def coin_back_to_admin(callback: CallbackQuery, db: Database):
+    """Coin management'dan admin panelga qaytish"""
+    text = (
+        "👑 <b>Admin Panel</b>\n\n"
+        "Xush kelibsiz, admin! Bu yerda botni boshqarishingiz mumkin.\n\n"
+        "Kerakli bo'limni tanlang:"
+    )
+    
+    await callback.message.edit_text(text, reply_markup=get_admin_main_menu())
+    await callback.answer()
+
+
+@router.message(Command("cancel"))
+async def cancel_coin_operation(message: Message, state: FSMContext):
+    """Coin operatsiyasini bekor qilish"""
+    current_state = await state.get_state()
+    if current_state is None:
+        return
+    
+    await state.clear()
+    await message.answer(
+        "❌ Operatsiya bekor qilindi!",
+        parse_mode="HTML"
+    )
